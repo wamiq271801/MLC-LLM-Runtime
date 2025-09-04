@@ -1,0 +1,52 @@
+name: Build MLC-LLM Android AAR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-aar:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout repo
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Install system dependencies
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git cmake ninja-build openjdk-17 wget unzip python3-pip zip
+          python3 -m pip install --upgrade pip pybind11
+
+      # 3️⃣ Clone MLC-LLM
+      - name: Clone MLC-LLM repo
+        run: |
+          git clone https://github.com/mlc-ai/mlc-llm.git
+          cd mlc-llm
+          git checkout main
+
+      # 4️⃣ Build Android AAR (arm64-v8a) with int4,int8,nf4
+      - name: Build Android AAR
+        run: |
+          cd mlc-llm
+          python3 build_android.py \
+            --output-dir build_aar \
+            --abi arm64-v8a \
+            --quantization-formats int4,int8,nf4 \
+            --release
+
+      # 5️⃣ Zip the AAR
+      - name: Zip the AAR
+        run: |
+          cd mlc-llm/build_aar
+          zip -r ../../mlc-llm-aar.zip mlc-llm.aar
+
+      # 6️⃣ Upload artifact for download
+      - name: Upload AAR artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: mlc-llm-aar
+          path: mlc-llm-aar.zip
