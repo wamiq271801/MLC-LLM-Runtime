@@ -1,49 +1,369 @@
-name: Build MLC-LLM Android AAR
+name: Build MLC-LLM Android AAR (arm64-v8a)
+
 on:
   push:
-    branches: [main]
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
+
+env:
+  ANDROID_NDK_VERSION: r25b
+  GRADLE_VERSION: 7.6.2
+  JAVA_VERSION: 17
+  CMAKE_VERSION: 3.22.1
+  PACKAGE_NAME: com.gem.app.mlc
+
 jobs:
   build-aar:
     runs-on: ubuntu-latest
+    
     steps:
-      # 1️⃣ Checkout repo
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
-      # 2️⃣ Install system dependencies
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git cmake ninja-build openjdk-17 wget unzip python3-pip zip
-          python3 -m pip install --upgrade pip pybind11
-      
-      # 3️⃣ Clone MLC-LLM
-      - name: Clone MLC-LLM repo
-        run: |
-          git clone https://github.com/mlc-ai/mlc-llm.git
-          cd mlc-llm
-          git checkout main
-      
-      # 4️⃣ Build Android AAR (arm64-v8a) with int4,int8,nf4
-      - name: Build Android AAR
-        run: |
-          cd mlc-llm
-          python3 build_android.py \
-            --output-dir build_aar \
-            --abi arm64-v8a \
-            --quantization-formats int4,int8,nf4 \
-            --release
-      
-      # 5️⃣ Zip the AAR
-      - name: Zip the AAR
-        run: |
-          cd mlc-llm/build_aar
-          zip -r ../../mlc-llm-aar.zip mlc-llm.aar
-      
-      # 6️⃣ Upload artifact for download
-      - name: Upload AAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mlc-llm-aar
-          path: mlc-llm-aar.zip
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+
+    - name: Cache Android NDK
+      id: cache-ndk
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/android-ndk
+        key: android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux
+        restore-keys: |
+          android-ndk-${{ env.ANDROID_NDK_VERSION }}-
+
+    - name: Cache Gradle
+      id: cache-gradle
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/gradle-${{ env.GRADLE_VERSION }}
+        key: gradle-${{ env.GRADLE_VERSION }}-linux
+        restore-keys: |
+          gradle-${{ env.GRADLE_VERSION }}-
+
+    - name: Cache MLC-LLM repository
+      id: cache-mlc
+      uses: actions/cache@v4
+      with:
+        path: mlc-llm
+        key: mlc-llm-${{ hashFiles('**/mlc-llm/.git/refs/heads/main') }}
+        restore-keys: |
+          mlc-llm-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          git \
+          unzip \
+          wget \
+          curl \
+          cmake \
+          build-essential \
+          zip \
+          zlib1g-dev \
+          libncurses5 \
+          libstdc++6 \
+          libtinfo-dev \
+          locales \
+          ninja-build
+
+    - name: Download and setup Android NDK
+      if: steps.cache-ndk.outputs.cache-hit != 'true'
+      run: |
+        wget -q https://dl.google.com/android/repository/android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip -O ndk.zip
+        sudo unzip -q ndk.zip -d /usr/local/
+        sudo mv /usr/local/android-ndk-${{ env.ANDROID_NDK_VERSION }} /usr/local/android-ndk
+
+    - name: Download and setup Gradle
+      if: steps.cache-gradle.outputs.cache-hit != 'true'
+      run: |
+        wget -q https://services.gradle.org/distributions/gradle-${{ env.GRADLE_VERSION }}-bin.zip -O gradle.zip
+        sudo unzip -q gradle.zip -d /usr/local/
+
+    - name: Set environment variables
+      run: |
+        echo "ANDROID_NDK_ROOT=/usr/local/android-ndk" >> $GITHUB_ENV
+        echo "ANDROID_SDK_ROOT=/usr/local/android-sdk" >> $GITHUB_ENV
+        echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+        echo "/usr/local/android-ndk" >> $GITHUB_PATH
+        echo "/usr/local/gradle-${{ env.GRADLE_VERSION }}/bin" >> $GITHUB_PATH
+
+    - name: Clone MLC-LLM repository
+      if: steps.cache-mlc.outputs.cache-hit != 'true'
+      run: |
+        git clone --depth 1 https://github.com/mlc-ai/mlc-llm.git
+
+    - name: Create Android build directory
+      run: |
+        cd mlc-llm
+        mkdir -p android_build
+
+    - name: Configure CMake for Android
+      run: |
+        cd mlc-llm/android_build
+        cmake .. \
+          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+          -DANDROID_ABI=arm64-v8a \
+          -DANDROID_PLATFORM=android-29 \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_SHARED_LIBS=ON \
+          -DMLC_ENABLE_INT4=ON \
+          -DMLC_ENABLE_INT8=ON \
+          -DMLC_ENABLE_NF4=ON \
+          -GNinja
+
+    - name: Build MLC-LLM native library
+      run: |
+        cd mlc-llm/android_build
+        cmake --build . --target mlc-llm -- -j$(nproc)
+
+    - name: Prepare AAR directory structure
+      run: |
+        cd mlc-llm
+        mkdir -p mlc-llm-aar/src/main/jniLibs/arm64-v8a
+        cp android_build/libmlc-llm.so mlc-llm-aar/src/main/jniLibs/arm64-v8a/
+
+    - name: Create Kotlin wrapper
+      run: |
+        cd mlc-llm
+        mkdir -p mlc-llm-aar/src/main/java/com/gem/app/mlc
+        cat > mlc-llm-aar/src/main/java/com/gem/app/mlc/MLCLibrary.kt << 'EOF'
+        package com.gem.app.mlc
+
+        /**
+         * MLC-LLM Runtime Library for Android
+         * Provides native inference capabilities for LLM models
+         */
+        object MLCLibrary {
+            init {
+                try {
+                    System.loadLibrary("mlc-llm")
+                } catch (e: UnsatisfiedLinkError) {
+                    throw RuntimeException("Failed to load MLC-LLM native library", e)
+                }
+            }
+
+            /**
+             * Initialize the MLC-LLM runtime with model configuration
+             * @param modelPath Path to the model directory
+             * @param quantization Quantization type (e.g., "int4", "int8", "fp16")
+             * @return Runtime handle for subsequent operations
+             */
+            external fun initRuntime(modelPath: String, quantization: String): Long
+
+            /**
+             * Run inference with the given input
+             * @param runtimeHandle Handle returned from initRuntime
+             * @param input Input text for inference
+             * @return Generated output text
+             */
+            external fun runInference(runtimeHandle: Long, input: String): String
+
+            /**
+             * Release runtime resources
+             * @param runtimeHandle Handle to release
+             */
+            external fun releaseRuntime(runtimeHandle: Long)
+
+            /**
+             * Get library version information
+             * @return Version string
+             */
+            external fun getVersion(): String
+        }
+        EOF
+
+    - name: Create AndroidManifest.xml
+      run: |
+        cd mlc-llm
+        mkdir -p mlc-llm-aar/src/main
+        cat > mlc-llm-aar/src/main/AndroidManifest.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+            package="com.gem.app.mlc">
+            
+            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+            <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+            
+        </manifest>
+        EOF
+
+    - name: Create build.gradle
+      run: |
+        cd mlc-llm
+        cat > mlc-llm-aar/build.gradle << 'EOF'
+        plugins {
+            id 'com.android.library'
+            id 'org.jetbrains.kotlin.android'
+        }
+
+        android {
+            namespace 'com.gem.app.mlc'
+            compileSdk 34
+
+            defaultConfig {
+                minSdk 24
+                targetSdk 34
+                
+                consumerProguardFiles "consumer-rules.pro"
+                
+                ndk {
+                    abiFilters "arm64-v8a"
+                }
+            }
+
+            sourceSets {
+                main {
+                    jniLibs.srcDirs = ['src/main/jniLibs']
+                }
+            }
+
+            buildTypes {
+                release {
+                    minifyEnabled false
+                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                }
+                debug {
+                    minifyEnabled false
+                }
+            }
+
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+
+            kotlinOptions {
+                jvmTarget = '17'
+            }
+
+            packagingOptions {
+                pickFirst '**/libc++_shared.so'
+                pickFirst '**/libmlc-llm.so'
+            }
+        }
+
+        dependencies {
+            implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.21'
+            implementation 'androidx.core:core-ktx:1.12.0'
+            
+            // Optional: Add logging
+            implementation 'org.slf4j:slf4j-android:1.7.36'
+        }
+        EOF
+
+    - name: Create gradle.properties
+      run: |
+        cd mlc-llm
+        cat > mlc-llm-aar/gradle.properties << 'EOF'
+        android.useAndroidX=true
+        android.enableJetifier=true
+        org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m
+        org.gradle.parallel=true
+        org.gradle.caching=true
+        android.enableR8.fullMode=false
+        EOF
+
+    - name: Create settings.gradle
+      run: |
+        cd mlc-llm
+        cat > mlc-llm-aar/settings.gradle << 'EOF'
+        pluginManagement {
+            repositories {
+                gradlePluginPortal()
+                google()
+                mavenCentral()
+            }
+        }
+
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+
+        rootProject.name = 'mlc-llm-aar'
+        EOF
+
+    - name: Create Gradle wrapper
+      run: |
+        cd mlc-llm/mlc-llm-aar
+        gradle wrapper --gradle-version ${{ env.GRADLE_VERSION }}
+
+    - name: Build AAR with Gradle
+      run: |
+        cd mlc-llm/mlc-llm-aar
+        chmod +x gradlew
+        ./gradlew assembleRelease --stacktrace --info
+
+    - name: Verify AAR build
+      run: |
+        cd mlc-llm/mlc-llm-aar
+        if [ -f "build/outputs/aar/mlc-llm-aar-release.aar" ]; then
+          echo "✅ AAR built successfully!"
+          ls -la build/outputs/aar/
+          unzip -l build/outputs/aar/mlc-llm-aar-release.aar
+        else
+          echo "❌ AAR build failed!"
+          exit 1
+        fi
+
+    - name: Upload AAR artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: mlc-llm-aar-arm64-v8a
+        path: |
+          mlc-llm/mlc-llm-aar/build/outputs/aar/mlc-llm-aar-release.aar
+          mlc-llm/mlc-llm-aar/build/outputs/aar/mlc-llm-aar-debug.aar
+        retention-days: 30
+
+    - name: Create release assets
+      run: |
+        cd mlc-llm/mlc-llm-aar/build/outputs/aar
+        sha256sum *.aar > checksums.sha256
+        ls -la
+
+    - name: Upload checksums
+      uses: actions/upload-artifact@v4
+      with:
+        name: mlc-llm-aar-checksums
+        path: mlc-llm/mlc-llm-aar/build/outputs/aar/checksums.sha256
+        retention-days: 30
+
+  test-aar:
+    needs: build-aar
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Download AAR artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: mlc-llm-aar-arm64-v8a
+        path: ./artifacts
+
+    - name: Verify AAR structure
+      run: |
+        cd artifacts
+        for aar in *.aar; do
+          echo "Checking $aar structure:"
+          unzip -l "$aar" | grep -E "(\.so|\.jar|AndroidManifest\.xml|classes\.jar)"
+          
+          # Extract and verify native library
+          unzip -q "$aar" -d temp_extract
+          if [ -f "temp_extract/jni/arm64-v8a/libmlc-llm.so" ]; then
+            echo "✅ Native library found in $aar"
+            file temp_extract/jni/arm64-v8a/libmlc-llm.so
+          else
+            echo "❌ Native library missing in $aar"
+          fi
+          rm -rf temp_extract
+        done
