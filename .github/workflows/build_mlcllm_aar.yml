@@ -138,6 +138,12 @@ jobs:
         echo "/usr/local/android-ndk" >> $GITHUB_PATH
         echo "/usr/local/gradle-${{ env.GRADLE_VERSION }}/bin" >> $GITHUB_PATH
         
+        # Set up Rust/Cargo environment for Android cross-compilation
+        echo "CC_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" >> $GITHUB_ENV
+        echo "CXX_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++" >> $GITHUB_ENV
+        echo "AR_aarch64_linux_android=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+        echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" >> $GITHUB_ENV
+        
         # Verify environment setup
         echo "Environment variables set:"
         echo "JAVA_HOME: $JAVA_HOME"
@@ -150,6 +156,14 @@ jobs:
         if [ -d "/usr/local/android-ndk" ]; then
           echo "✅ Android NDK found at /usr/local/android-ndk"
           ls -la /usr/local/android-ndk/build/cmake/
+          
+          # Verify NDK toolchain
+          if [ -f "/usr/local/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" ]; then
+            echo "✅ Android NDK toolchain found"
+          else
+            echo "❌ Android NDK toolchain not found"
+            ls -la /usr/local/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/ | head -10
+          fi
         else
           echo "❌ Android NDK not found!"
           exit 1
