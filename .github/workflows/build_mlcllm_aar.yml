@@ -85,6 +85,8 @@ jobs:
                 -DANDROID_PLATFORM=android-29 \
                 -DTVM_USE_THREADING_NATIVE=ON \
                 -DTVM_ENABLE_BACKTRACE=OFF \
+                -DTVM_USE_BACKTRACE=OFF \
+                -DTVM_ENABLE_FFI_TRACEBACK=OFF \
                 -DCMAKE_CXX_STANDARD=17 \
                 -DCMAKE_CXX_FLAGS="-fexceptions -frtti" \
                 ../..
