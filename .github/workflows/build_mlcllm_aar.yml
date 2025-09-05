@@ -232,29 +232,58 @@ jobs:
         cd mlc-llm/android_build
         echo "Building MLC-LLM native library for arm64-v8a..."
         
-        # Build with verbose output for debugging
-        cmake --build . --target mlc-llm --parallel $(nproc) --verbose || {
-          echo "❌ Build failed!"
-          echo "Checking for common build artifacts..."
-          ls -la . || true
-          find . -name "*.so" -o -name "*.a" || true
-          exit 1
+        # First, let's see what targets are available
+        echo "Available build targets:"
+        ninja -t targets | grep -i mlc || echo "No MLC targets found with grep"
+        
+        # Try the correct target name (mlc_llm with underscore)
+        cmake --build . --target mlc_llm --parallel $(nproc) --verbose || {
+          echo "❌ Build with target mlc_llm failed!"
+          echo "Trying alternative build approaches..."
+          
+          # Try building all targets
+          cmake --build . --parallel $(nproc) --verbose || {
+            echo "❌ Full build failed!"
+            echo "Available targets:"
+            ninja -t targets | head -20
+            echo "Checking for common build artifacts..."
+            ls -la . || true
+            find . -name "*.so" -o -name "*.a" || true
+            exit 1
+          }
         }
         
         echo "✅ Build completed successfully!"
         echo "Build artifacts:"
         ls -la .
-        find . -name "*.so" -o -name "libmlc-llm.*"
+        find . -name "*.so" -o -name "libmlc*"
         
-        # Verify the library was created
-        if [ -f "libmlc-llm.so" ]; then
-          echo "✅ libmlc-llm.so created successfully"
-          file libmlc-llm.so
-          ldd libmlc-llm.so || echo "Note: ldd may not work for cross-compiled binaries"
+        # Look for the actual library file (might have different name)
+        LIBRARY_FILE=""
+        if [ -f "libmlc_llm.so" ]; then
+          LIBRARY_FILE="libmlc_llm.so"
+        elif [ -f "lib/libmlc_llm.so" ]; then
+          LIBRARY_FILE="lib/libmlc_llm.so"  
+        elif [ -f "libmlc-llm.so" ]; then
+          LIBRARY_FILE="libmlc-llm.so"
         else
-          echo "❌ libmlc-llm.so not found!"
-          echo "Available files:"
-          find . -name "*mlc*" -type f
+          echo "Searching for MLC library files..."
+          find . -name "*mlc*.so" -type f
+          LIBRARY_FILE=$(find . -name "*mlc*.so" -type f | head -1)
+        fi
+        
+        if [ -n "$LIBRARY_FILE" ] && [ -f "$LIBRARY_FILE" ]; then
+          echo "✅ MLC library found: $LIBRARY_FILE"
+          file "$LIBRARY_FILE"
+          ls -la "$LIBRARY_FILE"
+          
+          # Copy to standard name for AAR creation
+          cp "$LIBRARY_FILE" libmlc-llm.so
+          echo "✅ Library copied as libmlc-llm.so"
+        else
+          echo "❌ No MLC library found!"
+          echo "All .so files in build directory:"
+          find . -name "*.so" -type f
           exit 1
         fi
 
