@@ -11,6 +11,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v3
@@ -32,41 +33,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install mlc_llm
 
-      - name: Set Up Android NDK and CMake
+      - name: Set Up Android NDK
         run: |
           wget https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
           unzip android-ndk-r21e-linux-x86_64.zip
-          export ANDROID_NDK_HOME=$(pwd)/android-ndk-r21e
-          export PATH=$ANDROID_NDK_HOME:$PATH
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-          echo "PATH=$ANDROID_NDK_HOME:$PATH" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r21e" >> $GITHUB_ENV
+          echo "PATH=$(pwd)/android-ndk-r21e:$PATH" >> $GITHUB_ENV
 
-      - name: Compile Model with Quantization
+      - name: Build MLC-LLM Native Library
         run: |
-          mlc_llm gen_config \
-            --model-path /path/to/your/model \
-            --quantization q4f16_1 \
-            --output /path/to/output/config
+          mkdir -p build/native
+          cd build/native
+          # Configure for ARM64-v8a
+          cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+                -DANDROID_ABI=arm64-v8a \
+                -DANDROID_PLATFORM=android-29 \
+                ../..
+          make -j$(nproc)
 
-          mlc_llm convert_weights \
-            --model-path /path/to/your/model \
-            --quantization q4f16_1 \
-            --output /path/to/output/weights
-
-      - name: Build Android Shared Library
-        run: |
-          mkdir build
-          cd build
-          cmake ..
-          make
-
-      - name: Package as AAR
-        run: |
-          mkdir -p build/outputs/aar
-          cp build/libmlc_llm.so build/outputs/aar/mlc_llm.aar
-
-      - name: Upload AAR to GitHub
-        uses: actions/upload-artifact@v3
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: mlc-llm-android-aar
-          path: build/outputs/aar/mlc_llm.aar
+          name: mlc-llm-android-lib
+          path: build/native
