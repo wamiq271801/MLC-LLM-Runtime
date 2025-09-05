@@ -35,6 +35,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy
 
+      - name: Cache Rust
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.rustup
+          key: rust-cache-${{ runner.os }}-v1
+
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -42,17 +51,26 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Cache Android NDK
+        uses: actions/cache@v3
+        with:
+          path: android-ndk-r25b
+          key: android-ndk-r25b-${{ runner.os }}-v1
+
       - name: Set Up Android NDK r25b
         run: |
-          wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
-          unzip android-ndk-r25b-linux.zip
+          if [ ! -d "android-ndk-r25b" ]; then
+            wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
+            unzip android-ndk-r25b-linux.zip
+          fi
           echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r25b" >> $GITHUB_ENV
           echo "PATH=$(pwd)/android-ndk-r25b:$PATH" >> $GITHUB_ENV
 
       - name: Clone MLC-LLM Repository
         run: |
-          git clone --recursive https://github.com/mlc-ai/mlc-llm.git
+          git clone https://github.com/mlc-ai/mlc-llm.git
           cd mlc-llm
+          git submodule update --init --recursive
 
       - name: Build MLC-LLM Native Library for Android
         run: |
@@ -63,8 +81,10 @@ jobs:
                 -DANDROID_ABI=arm64-v8a \
                 -DANDROID_PLATFORM=android-29 \
                 -DTVM_USE_THREADING_NATIVE=ON \
+                -DCMAKE_CXX_STANDARD=17 \
+                -DCMAKE_CXX_FLAGS="-fexceptions -frtti" \
                 ../..
-          make -j$(nproc)
+          make -j1 VERBOSE=1
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
