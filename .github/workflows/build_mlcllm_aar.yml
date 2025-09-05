@@ -50,6 +50,7 @@ jobs:
           source $HOME/.cargo/env
           rustc --version
           cargo --version
+          rustup target add aarch64-linux-android
 
       - name: Cache Android NDK
         uses: actions/cache@v3
@@ -77,6 +78,8 @@ jobs:
           cd mlc-llm
           mkdir -p build/android
           cd build/android
+          # Set Rust linker for Android target
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
           cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
                 -DANDROID_PLATFORM=android-29 \
