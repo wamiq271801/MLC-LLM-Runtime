@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -42,12 +42,12 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Set Up Android NDK
+      - name: Set Up Android NDK r25b
         run: |
-          wget https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
-          unzip android-ndk-r21e-linux-x86_64.zip
-          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r21e" >> $GITHUB_ENV
-          echo "PATH=$(pwd)/android-ndk-r21e:$PATH" >> $GITHUB_ENV
+          wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
+          unzip android-ndk-r25b-linux.zip
+          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r25b" >> $GITHUB_ENV
+          echo "PATH=$(pwd)/android-ndk-r25b:$PATH" >> $GITHUB_ENV
 
       - name: Clone MLC-LLM Repository
         run: |
@@ -62,6 +62,7 @@ jobs:
           cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
                 -DANDROID_PLATFORM=android-29 \
+                -DTVM_USE_THREADING_NATIVE=ON \
                 ../..
           make -j$(nproc)
 
