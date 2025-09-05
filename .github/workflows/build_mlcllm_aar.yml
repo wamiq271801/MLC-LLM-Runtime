@@ -2,342 +2,71 @@ name: Build MLC-LLM Android Runtime
 
 on:
   push:
-    branches: [ main, develop ]
+    branches:
+      - main
   pull_request:
-    branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      quantization_formats:
-        description: 'Quantization formats to support'
-        required: false
-        default: 'int4,int8,int3'
-        type: string
-
-env:
-  ANDROID_NDK_VERSION: '25.2.9519653'
-  CMAKE_VERSION: '3.22.1'
-  PYTHON_VERSION: '3.10'
+    branches:
+      - main
 
 jobs:
-  build-mlc-llm-android:
+  build:
     runs-on: ubuntu-latest
-    
-    strategy:
-      matrix:
-        arch: [arm64-v8a]
-        quantization: [int4, int8, int3]
-    
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        fetch-depth: 0
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+      - name: Set Up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
 
-    - name: Setup Java JDK
-      uses: actions/setup-java@v3
-      with:
-        distribution: 'temurin'
-        java-version: '17'
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            unzip \
+            build-essential \
+            clang \
+            python3-pip
+          python -m pip install --upgrade pip
+          pip install mlc_llm
 
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
+      - name: Set Up Android NDK and CMake
+        run: |
+          wget https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
+          unzip android-ndk-r21e-linux-x86_64.zip
+          export ANDROID_NDK_HOME=$(pwd)/android-ndk-r21e
+          export PATH=$ANDROID_NDK_HOME:$PATH
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+          echo "PATH=$ANDROID_NDK_HOME:$PATH" >> $GITHUB_ENV
 
-    - name: Install Android NDK
-      run: |
-        sdkmanager --install "ndk;${{ env.ANDROID_NDK_VERSION }}"
-        echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+      - name: Compile Model with Quantization
+        run: |
+          mlc_llm gen_config \
+            --model-path /path/to/your/model \
+            --quantization q4f16_1 \
+            --output /path/to/output/config
 
-    - name: Install CMake
-      run: |
-        sdkmanager --install "cmake;${{ env.CMAKE_VERSION }}"
+          mlc_llm convert_weights \
+            --model-path /path/to/your/model \
+            --quantization q4f16_1 \
+            --output /path/to/output/weights
 
-    - name: Cache Python Dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
+      - name: Build Android Shared Library
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+          make
 
-    - name: Install Python Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install numpy torch torchvision
-        pip install mlc-ai-nightly mlc-llm-nightly
-        pip install transformers tokenizers
-        pip install cmake ninja pybind11
+      - name: Package as AAR
+        run: |
+          mkdir -p build/outputs/aar
+          cp build/libmlc_llm.so build/outputs/aar/mlc_llm.aar
 
-    - name: Clone MLC-LLM Repository
-      run: |
-        git clone --recursive https://github.com/mlc-ai/mlc-llm.git
-        cd mlc-llm
-        git submodule update --init --recursive
-
-    - name: Setup Build Environment
-      run: |
-        cd mlc-llm
-        mkdir -p build-android-${{ matrix.arch }}
-        echo "MLC_LLM_SOURCE_DIR=$(pwd)" >> $GITHUB_ENV
-        echo "BUILD_DIR=$(pwd)/build-android-${{ matrix.arch }}" >> $GITHUB_ENV
-
-    - name: Configure CMake for Android
-      run: |
-        cd ${{ env.BUILD_DIR }}
-        cmake ${{ env.MLC_LLM_SOURCE_DIR }} \
-          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
-          -DANDROID_ABI=${{ matrix.arch }} \
-          -DANDROID_NATIVE_API_LEVEL=24 \
-          -DANDROID_STL=c++_shared \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_CXX_STANDARD=17 \
-          -DUSE_CUDA=OFF \
-          -DUSE_VULKAN=ON \
-          -DUSE_OPENCL=ON \
-          -DUSE_METAL=OFF \
-          -DMLC_ENABLE_QUANTIZATION=ON \
-          -DMLC_QUANTIZATION_FORMATS="${{ matrix.quantization }}" \
-          -DUSE_HEXAGON_SDK=OFF \
-          -DBUILD_SHARED_LIBS=ON \
-          -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH
-
-    - name: Build MLC-LLM Runtime
-      run: |
-        cd ${{ env.BUILD_DIR }}
-        cmake --build . --config Release --parallel $(nproc)
-
-    - name: Prepare Android Library Structure
-      run: |
-        cd mlc-llm
-        mkdir -p android-build/src/main/jniLibs/${{ matrix.arch }}
-        mkdir -p android-build/src/main/assets
-        mkdir -p android-build/src/main/java
-        
-        # Copy native libraries
-        cp ${{ env.BUILD_DIR }}/lib*.so android-build/src/main/jniLibs/${{ matrix.arch }}/
-        
-        # Copy headers for JNI
-        cp -r cpp/serve/include/* android-build/src/main/cpp/ 2>/dev/null || true
-
-    - name: Create Android Manifest
-      run: |
-        cd mlc-llm/android-build
-        cat > src/main/AndroidManifest.xml << 'EOF'
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-            package="ai.mlc.mlcllm">
-            <uses-permission android:name="android.permission.INTERNET" />
-            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-            <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-        </manifest>
-        EOF
-
-    - name: Create Gradle Build Files
-      run: |
-        cd mlc-llm/android-build
-        
-        # Create build.gradle
-        cat > build.gradle << 'EOF'
-        plugins {
-            id 'com.android.library'
-        }
-
-        android {
-            namespace 'ai.mlc.mlcllm'
-            compileSdk 34
-
-            defaultConfig {
-                minSdk 24
-                targetSdk 34
-                versionCode 1
-                versionName "1.0"
-
-                ndk {
-                    abiFilters 'arm64-v8a'
-                }
-
-                externalNativeBuild {
-                    cmake {
-                        cppFlags "-std=c++17"
-                        arguments "-DANDROID_STL=c++_shared"
-                    }
-                }
-            }
-
-            buildTypes {
-                release {
-                    minifyEnabled false
-                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
-                }
-            }
-
-            compileOptions {
-                sourceCompatibility JavaVersion.VERSION_17
-                targetCompatibility JavaVersion.VERSION_17
-            }
-
-            packagingOptions {
-                pickFirst '**/libc++_shared.so'
-                pickFirst '**/libjsc_shared.so'
-            }
-        }
-
-        dependencies {
-            implementation 'androidx.appcompat:appcompat:1.6.1'
-        }
-        EOF
-
-        # Create gradle.properties
-        cat > gradle.properties << 'EOF'
-        android.useAndroidX=true
-        android.enableJetifier=true
-        org.gradle.jvmargs=-Xmx2048m
-        EOF
-
-    - name: Create Quantization Configuration
-      run: |
-        cd mlc-llm/android-build/src/main/assets
-        cat > quantization_config.json << 'EOF'
-        {
-          "supported_formats": ["int4", "int8", "int3"],
-          "default_format": "int4",
-          "optimization_level": 3,
-          "target_architecture": "arm64-v8a"
-        }
-        EOF
-
-    - name: Package Build Artifacts
-      run: |
-        cd mlc-llm
-        tar -czf mlc-llm-android-${{ matrix.arch }}-${{ matrix.quantization }}.tar.gz android-build/
-        
-        # Create build info
-        cat > build-info-${{ matrix.arch }}-${{ matrix.quantization }}.txt << EOF
-        Build Information:
-        - Architecture: ${{ matrix.arch }}
-        - Quantization: ${{ matrix.quantization }}
-        - Build Time: $(date)
-        - Commit: ${{ github.sha }}
-        - NDK Version: ${{ env.ANDROID_NDK_VERSION }}
-        - CMake Version: ${{ env.CMAKE_VERSION }}
-        EOF
-
-    - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: mlc-llm-android-${{ matrix.arch }}-${{ matrix.quantization }}
-        path: |
-          mlc-llm/mlc-llm-android-${{ matrix.arch }}-${{ matrix.quantization }}.tar.gz
-          mlc-llm/build-info-${{ matrix.arch }}-${{ matrix.quantization }}.txt
-        retention-days: 30
-
-    - name: Upload Native Libraries
-      uses: actions/upload-artifact@v3
-      with:
-        name: native-libs-${{ matrix.arch }}-${{ matrix.quantization }}
-        path: mlc-llm/android-build/src/main/jniLibs/
-        retention-days: 30
-
-  create-release:
-    needs: build-mlc-llm-android
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-    - name: Download All Artifacts
-      uses: actions/download-artifact@v3
-
-    - name: Create Release Package
-      run: |
-        mkdir -p release-package/android-libs
-        
-        # Combine all architectures and quantization formats
-        for dir in mlc-llm-android-*; do
-          if [ -d "$dir" ]; then
-            cp -r "$dir"/* release-package/android-libs/
-          fi
-        done
-        
-        # Create comprehensive build script
-        cat > release-package/build-aar.sh << 'EOF'
-        #!/bin/bash
-        echo "Building MLC-LLM AAR package..."
-        
-        # Extract all build packages
-        for file in *.tar.gz; do
-          if [ -f "$file" ]; then
-            echo "Extracting $file..."
-            tar -xzf "$file"
-          fi
-        done
-        
-        # Navigate to android build directory
-        cd android-build
-        
-        # Build AAR
-        ./gradlew assembleRelease
-        
-        echo "AAR built successfully! Check build/outputs/aar/ directory."
-        EOF
-        
-        chmod +x release-package/build-aar.sh
-        
-        # Create README
-        cat > release-package/README.md << 'EOF'
-        # MLC-LLM Android Runtime Library
-
-        ## Features
-        - **Architecture**: arm64-v8a
-        - **Quantization Support**: int4, int8, int3
-        - **Platform**: Android API 24+
-
-        ## Building AAR
-        1. Extract the release package
-        2. Run `./build-aar.sh`
-        3. Find the generated AAR in `android-build/build/outputs/aar/`
-
-        ## Integration
-        Add the generated AAR to your Android project and include the native libraries.
-
-        ## Requirements
-        - Android Studio 4.0+
-        - Gradle 7.0+
-        - NDK 25.2+
-        EOF
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: v${{ github.run_number }}
-        name: MLC-LLM Android Runtime v${{ github.run_number }}
-        body: |
-          MLC-LLM Android Runtime Library
-          - Architecture: arm64-v8a
-          - Quantization formats: int4, int8, int3
-          - Ready to build AAR package
-        files: |
-          release-package/**/*
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  notify-completion:
-    needs: [build-mlc-llm-android, create-release]
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-    - name: Build Status Notification
-      run: |
-        if [ "${{ needs.build-mlc-llm-android.result }}" == "success" ]; then
-          echo "✅ MLC-LLM Android build completed successfully!"
-          echo "📦 Artifacts uploaded and ready for AAR building"
-          echo "🏗️ Supported: arm64-v8a with int4/int8/int3 quantization"
-        else
-          echo "❌ Build failed. Check the workflow logs for details."
-        fi
+      - name: Upload AAR to GitHub
+        uses: actions/upload-artifact@v3
+        with:
+          name: mlc-llm-android-aar
+          path: build/outputs/aar/mlc_llm.aar
