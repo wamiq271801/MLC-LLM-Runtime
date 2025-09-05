@@ -102,7 +102,19 @@ jobs:
     - name: Create Android build directory
       run: |
         cd mlc-llm
+        echo "Creating Android build directory..."
         mkdir -p android_build
+        
+        # Verify build environment
+        echo "Build environment check:"
+        echo "CMake version: $(cmake --version | head -1)"
+        echo "Ninja version: $(ninja --version)"
+        echo "NDK root: $ANDROID_NDK_ROOT"
+        echo "Java home: $JAVA_HOME"
+        
+        # Check submodules
+        echo "Initializing and updating submodules..."
+        git submodule update --init --recursive || echo "Warning: Submodule update failed, continuing..."
 
     - name: Configure CMake for Android
       run: |
