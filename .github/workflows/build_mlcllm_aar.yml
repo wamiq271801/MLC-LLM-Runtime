@@ -1,4 +1,4 @@
-name: Build MLC-LLM Android Runtime
+name: Build MLC-LLM Android Runtime From Source
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
       - name: Set Up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.8'
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
@@ -29,9 +29,18 @@ jobs:
             unzip \
             build-essential \
             clang \
+            git \
+            curl \
             python3-pip
           python -m pip install --upgrade pip
-          pip install mlc_llm
+          pip install numpy
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustc --version
+          cargo --version
 
       - name: Set Up Android NDK
         run: |
@@ -40,11 +49,16 @@ jobs:
           echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r21e" >> $GITHUB_ENV
           echo "PATH=$(pwd)/android-ndk-r21e:$PATH" >> $GITHUB_ENV
 
-      - name: Build MLC-LLM Native Library
+      - name: Clone MLC-LLM Repository
         run: |
-          mkdir -p build/native
-          cd build/native
-          # Configure for ARM64-v8a
+          git clone --recursive https://github.com/mlc-ai/mlc-llm.git
+          cd mlc-llm
+
+      - name: Build MLC-LLM Native Library for Android
+        run: |
+          cd mlc-llm
+          mkdir -p build/android
+          cd build/android
           cmake -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
                 -DANDROID_ABI=arm64-v8a \
                 -DANDROID_PLATFORM=android-29 \
@@ -55,4 +69,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mlc-llm-android-lib
-          path: build/native
+          path: mlc-llm/build/android
